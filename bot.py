@@ -1,3 +1,4 @@
+#bot.py
 import os           
 from dotenv import load_dotenv  
 import asyncio
@@ -6,10 +7,6 @@ from botpy.message import GroupMessage, Message
 from mcstatus import JavaServer
 from config import SERVER_LIST
 
-load_dotenv()
-
-APPID = os.getenv("QQ_APPID")
-SECRET = os.getenv("QQ_SECRET")
 
 def get_all_status_sync() -> str:
     """同步方式查询所有服务器"""
@@ -45,8 +42,3 @@ class MyClient(botpy.Client):
             msg_id=message.id,
             content=f"\n📊 服务器状态：\n\n{status}"
         )
-
-if __name__ == "__main__":
-    intents = botpy.Intents(public_messages=True)
-    client = MyClient(intents=intents)
-    client.run(appid=APPID, secret=SECRET)
