@@ -1,58 +1,52 @@
-from nonebot import on_message
-from nonebot.adapters.onebot.v11 import Bot, Event
-from nonebot.rule import Rule
-import httpx
+import os           
+from dotenv import load_dotenv  
 import asyncio
-from datetime import datetime
+import botpy
+from botpy.message import GroupMessage, Message
+from mcstatus import JavaServer
+from config import SERVER_LIST
 
-from config import SERVERS, ALLOWED_GROUP_ID
+load_dotenv()
 
-def is_allowed(event) -> bool:
-    if event.detail_type == "private":
-        return True
-    if event.detail_type == "group":
-        return event.group_id == ALLOWED_GROUP_ID and event.to_me
-    return False
+APPID = os.getenv("QQ_APPID")
+SECRET = os.getenv("QQ_SECRET")
 
-mc_status = on_message(rule=Rule(is_allowed), priority=5)
-
-@mc_status.handle()
-async def handle_mc_status(bot: Bot, event: Event):
-    await mc_status.finish(await get_all_servers_status())
-
-async def get_all_servers_status():
-    tasks = [query_server(server) for server in SERVERS]
-    results = await asyncio.gather(*tasks)
+def get_all_status_sync() -> str:
+    """同步方式查询所有服务器"""
+    results = []
+    for server in SERVER_LIST:
+        host, port, name = server["host"], server["port"], server["name"]
+        try:
+            # 使用测试成功的写法：lookup + status() 不传 timeout
+            srv = JavaServer.lookup(f"{host}:{port}")
+            status = srv.status()
+            results.append(
+                f"🟢 {name} ："
+                f"   {status.players.online}/{status.players.max} 人"
+                f"   {round(status.latency, 1)}ms"
+            )
+        except Exception as e:
+            print(f"查询 {name} 失败: {e}")  # 控制台看具体错误
+            results.append(f"🔴 {name} ：   离线或无法连接")
     
-    reply = "🎮 服务器状态汇总\n" + "━" * 20 + "\n"
-    for i, server in enumerate(SERVERS):
-        reply += f"【{server['name']}】 {server['host']}:{server['port']}\n"
-        reply += results[i] + "\n"
-    reply += "━" * 20 + "\n"
-    reply += f"⏰ {datetime.now().strftime('%H:%M:%S')} 更新"
-    return reply
+    return "\n\n".join(results)
 
-async def query_server(server):
-    host, port = server["host"], server["port"]
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(f"https://api.mcapi.us/server/status/{host}/{port}")
-            data = resp.json()
-        if data.get("status") != "success":
-            return "❌ 服务器离线"
-        players = data.get("server", {}).get("players", {})
-        online, max_players = players.get("online", 0), players.get("max", 0)
-        sample = players.get("sample", [])
-        line = f"👥 在线: {online}/{max_players}\n"
-        if online > 0 and sample:
-            names = [p.get("name", "?") for p in sample if p.get("name")]
-            if len(names) > 20:
-                names = names[:20] + [f"... 还有{len(names)-20}人"]
-            line += "📋 " + ", ".join(names)
-        else:
-            line += "🧙 当前没有玩家在线"
-        return line
-    except httpx.TimeoutException:
-        return "⏱️ 连接超时"
-    except Exception as e:
-        return f"⚠️ 查询失败: {str(e)[:30]}"
+class MyClient(botpy.Client):
+    async def on_c2c_message_create(self, message: Message):
+        # 在独立线程执行同步查询，避免阻塞事件循环
+        status = await asyncio.get_event_loop().run_in_executor(None, get_all_status_sync)
+        await message.reply(content=f"\n📊 服务器状态：\n\n{status}")
+
+    async def on_group_at_message_create(self, message: GroupMessage):
+        status = await asyncio.get_event_loop().run_in_executor(None, get_all_status_sync)
+        await message._api.post_group_message(
+            group_openid=message.group_openid,
+            msg_type=0,
+            msg_id=message.id,
+            content=f"\n📊 服务器状态：\n\n{status}"
+        )
+
+if __name__ == "__main__":
+    intents = botpy.Intents(public_messages=True)
+    client = MyClient(intents=intents)
+    client.run(appid=APPID, secret=SECRET)
